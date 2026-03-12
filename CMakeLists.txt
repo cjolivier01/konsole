@@ -20,6 +20,13 @@ set(QT_MAJOR_VERSION "6")
 # Release script will create bugzilla versions
 project(konsole VERSION ${RELEASE_SERVICE_VERSION})
 
+if(UNIX AND NOT APPLE)
+    # Keep build-tree binaries relocatable. Container builds mount the source
+    # tree at a different absolute path than the host, so absolute build rpaths
+    # make the build output needlessly fragile.
+    set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+endif()
+
 find_package(ECM ${KF6_DEP_VERSION} REQUIRED NO_MODULE)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${ECM_MODULE_PATH})
 
