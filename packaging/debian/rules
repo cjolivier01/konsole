@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DBUILD_TESTING=OFF -DENABLE_PLUGIN_SSHMANAGER=ON
+
+override_dh_auto_test:
+	# The upstream test suite is intentionally disabled for package builds.
+	:
+
+execute_after_dh_fixperms-arch:
+	chmod -x $(CURDIR)/debian/konsole/usr/share/kio/servicemenus/konsolerun.desktop

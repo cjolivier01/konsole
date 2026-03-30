@@ -1,0 +1,16 @@
+usr/bin/konsole
+usr/bin/konsoleprofile
+usr/lib/*/kconf_update_bin/konsole_globalaccel
+usr/lib/*/kconf_update_bin/konsole_show_menubar
+usr/lib/*/libkonsoleapp.so.*
+usr/lib/*/qt6/plugins/konsoleplugins/*
+usr/share/applications/org.kde.konsole.desktop
+usr/share/doc/HTML/*/konsole/
+usr/share/kconf_update/konsole.upd
+usr/share/kconf_update/konsole_add_hamburgermenu_to_toolbar.sh
+usr/share/kglobalaccel/org.kde.konsole.desktop
+usr/share/kio/servicemenus/konsolerun.desktop
+usr/share/locale/
+usr/share/metainfo/org.kde.konsole.appdata.xml
+usr/share/qlogging-categories6/konsole.categories
+usr/share/zsh/site-functions/_konsole

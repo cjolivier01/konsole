@@ -70,3 +70,21 @@ Run the installed Flatpak with:
 
 If `org.kde.konsole//24.12` is not installed yet, the runner installs it from
 `konsole-24.12.flatpak` automatically.
+
+For another machine without `org.kde.Platform//6.9` already installed, export
+the runtime bundle too:
+
+```bash
+./tools/export-flatpak-runtime-bundle.sh
+```
+
+Then copy both files:
+- `org.kde.Platform-6.9.flatpak`
+- `konsole-24.12.flatpak`
+
+Install them on the target machine in this order:
+
+```bash
+flatpak install ./org.kde.Platform-6.9.flatpak
+flatpak install ./konsole-24.12.flatpak
+```
