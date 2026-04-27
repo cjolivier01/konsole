@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: ./tools/build-deb.sh [options] [-- dpkg-buildpackage args...]
+
+Build Ubuntu-style Debian packages for the current Konsole checkout without
+modifying tracked files in the working tree.
+
+Options:
+  -h, --help                 Show this help text
+  -o, --output-dir DIR       Where built .deb artifacts should be copied
+                             Default: build-deb/packages
+  -w, --work-root DIR        Where to create the staged source tree
+                             Default: build-deb
+      --prepare-only         Stage the source tree and debian/ metadata only
+      --keep-stage           Keep the staged source tree after a successful build
+      --version-suffix TEXT  Debian revision suffix
+                             Default: 0local1
+
+Any arguments after `--` are passed directly to dpkg-buildpackage.
+EOF
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PACKAGING_DIR="${REPO_ROOT}/packaging/debian"
+OUTPUT_DIR="${REPO_ROOT}/build-deb/packages"
+WORK_ROOT="${REPO_ROOT}/build-deb"
+PREPARE_ONLY=0
+KEEP_STAGE=0
+VERSION_SUFFIX="0local1"
+declare -a DPKG_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -o|--output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        -w|--work-root)
+            WORK_ROOT="$2"
+            shift 2
+            ;;
+        --prepare-only)
+            PREPARE_ONLY=1
+            shift
+            ;;
+        --keep-stage)
+            KEEP_STAGE=1
+            shift
+            ;;
+        --version-suffix)
+            VERSION_SUFFIX="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            DPKG_ARGS=("$@")
+            break
+            ;;
+        *)
+            echo "error: unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "error: required command not found: $1" >&2
+        exit 1
+    fi
+}
+
+require_command rsync
+require_command dpkg-buildpackage
+require_command dpkg-checkbuilddeps
+
+project_version_major="$(sed -n 's/^set(RELEASE_SERVICE_VERSION_MAJOR "\([^"]*\)")/\1/p' "${REPO_ROOT}/CMakeLists.txt" | head -n 1)"
+project_version_minor="$(sed -n 's/^set(RELEASE_SERVICE_VERSION_MINOR "\([^"]*\)")/\1/p' "${REPO_ROOT}/CMakeLists.txt" | head -n 1)"
+project_version_micro="$(sed -n 's/^set(RELEASE_SERVICE_VERSION_MICRO "\([^"]*\)")/\1/p' "${REPO_ROOT}/CMakeLists.txt" | head -n 1)"
+project_version="${project_version_major}.${project_version_minor}.${project_version_micro}"
+
+if [[ -z "${project_version_major}" || -z "${project_version_minor}" || -z "${project_version_micro}" ]]; then
+    echo "error: could not determine release version from CMakeLists.txt" >&2
+    exit 1
+fi
+
+git_ref="nogit"
+dirty_suffix=""
+if command -v git >/dev/null 2>&1 && git -C "${REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git_ref="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+    if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
+        dirty_suffix="+dirty"
+    fi
+fi
+
+timestamp="$(date -u +%Y%m%d%H%M%S)"
+package_version="4:${project_version}-${VERSION_SUFFIX}+git${git_ref}.${timestamp}${dirty_suffix}"
+build_id="konsole-${project_version}-${git_ref}"
+stage_root="${WORK_ROOT}/${build_id}"
+stage_source="${stage_root}/source/konsole-${project_version}"
+artifact_root="${stage_root}/source"
+
+if command -v lsb_release >/dev/null 2>&1; then
+    debian_distribution="$(lsb_release -sc 2>/dev/null || true)"
+fi
+if [[ -z "${debian_distribution:-}" ]] && [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    debian_distribution="${VERSION_CODENAME:-unstable}"
+fi
+debian_distribution="${debian_distribution:-unstable}"
+
+maintainer_name="${DEBFULLNAME:-Local Konsole Build}"
+maintainer_email="${DEBEMAIL:-local@invalid}"
+
+rm -rf "${stage_root}"
+mkdir -p "${stage_source}" "${OUTPUT_DIR}"
+
+rsync \
+    -a \
+    --delete \
+    --exclude '.git' \
+    --exclude '.gitlab' \
+    --exclude '.deb-build' \
+    --exclude 'build-deb' \
+    --exclude 'build' \
+    --exclude 'build-*' \
+    --exclude 'flatpak-build' \
+    --exclude 'flatpak-repo' \
+    --exclude '.flatpak-builder' \
+    --exclude '*.deb' \
+    --exclude '*.changes' \
+    --exclude '*.buildinfo' \
+    --exclude '*.dsc' \
+    --exclude '*.tar.*' \
+    "${REPO_ROOT}/" \
+    "${stage_source}/"
+
+rm -rf "${stage_source}/debian"
+mkdir -p "${stage_source}/debian"
+cp -a "${PACKAGING_DIR}/." "${stage_source}/debian/"
+
+cat > "${stage_source}/debian/changelog" <<EOF
+konsole (${package_version}) ${debian_distribution}; urgency=medium
+
+  * Local package build from ${git_ref}${dirty_suffix}.
+  * Generated by tools/build-deb.sh.
+
+ -- ${maintainer_name} <${maintainer_email}>  $(LC_ALL=C date -R)
+EOF
+
+chmod +x \
+    "${stage_source}/debian/rules" \
+    "${stage_source}/debian/konsole.postinst" \
+    "${stage_source}/debian/konsole.prerm"
+
+echo "Prepared staged Debian source tree at: ${stage_source}"
+echo "Package version: ${package_version}"
+
+if [[ "${PREPARE_ONLY}" -eq 1 ]]; then
+    exit 0
+fi
+
+(
+    cd "${stage_source}"
+    dpkg-checkbuilddeps
+)
+
+(
+    cd "${stage_source}"
+    export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-parallel=$(nproc)}"
+    dpkg-buildpackage -b -us -uc "${DPKG_ARGS[@]}"
+)
+
+find "${artifact_root}" -maxdepth 1 -type f \
+    \( -name '*.deb' -o -name '*.changes' -o -name '*.buildinfo' \) \
+    -exec cp -f {} "${OUTPUT_DIR}/" \;
+
+if [[ "${KEEP_STAGE}" -eq 0 ]]; then
+    rm -rf "${stage_root}"
+fi
+
+echo "Artifacts copied to: ${OUTPUT_DIR}"

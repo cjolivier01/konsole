@@ -32,6 +32,10 @@ doxydoc/
 .cache
 .idea
 /cmake-build*
+/flatpak-build*
+/flatpak-repo*
+/.flatpak-builder/
+/*.flatpak
 
 !/tests/Makefile
 !/tests/*/Makefile

@@ -8,6 +8,29 @@ access to a terminal window. Konsole's features and usage are explained and
 illustrated in the Konsole handbook, which can be accessed by browsing to
 `help:/konsole` in Konqueror.
 
+## Building Debian packages on Ubuntu 24.04
+
+For the `v24.12.x` packaging branch in this repository, stock Ubuntu 24.04
+packages are too old for the required Qt6, KF6, and ECM versions. Enable the
+KDE neon User repository first, then install the build dependencies and run the
+Debian packaging helper:
+
+```bash
+sudo install -d /etc/apt/keyrings
+curl -fsSL https://archive.neon.kde.org/public.key | sudo gpg --dearmor -o /etc/apt/keyrings/neon-archive-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/neon-archive-keyring.gpg] https://archive.neon.kde.org/user noble main" | sudo tee /etc/apt/sources.list.d/kde-neon-user.list >/dev/null
+
+sudo apt-get update
+sudo apt-get install -y curl gpg devscripts equivs rsync dpkg-dev
+sudo mk-build-deps --install --remove --tool 'apt-get -y --no-install-recommends -o Dpkg::Options::=--force-overwrite' packaging/debian/control
+
+./tools/build-deb.sh
+```
+
+Generated artifacts are copied to `build-deb/packages/`.
+
+For native, container, and Flatpak build notes beyond this Debian packaging
+flow, see `BUILD.md`.
 
 ## Directory Structure
 
@@ -32,4 +55,3 @@ https://mail.kde.org/mailman/listinfo/konsole-devel.
 - [Builds](https://invent.kde.org/utilities/konsole/-/pipelines)
 - [Forums](https://discuss.kde.org)
 - [Konsole Bug Reports per Component](https://bugs.kde.org/describecomponents.cgi?product=konsole)
-

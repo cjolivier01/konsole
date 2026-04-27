@@ -27,6 +27,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QHostInfo>
+#include <QSet>
 #include <QStringList>
 #include <QTextStream>
 #include <QtGlobal>
@@ -461,8 +462,6 @@ protected:
 
     bool readProcessName(int pid) override
     {
-        Q_UNUSED(pid);
-
         if (!_infoFile || _infoFile->error() != 0 || !_infoFile->reset()) {
             return false;
         }
@@ -476,12 +475,188 @@ protected:
 
         const int nameStartIdx = data.indexOf(QLatin1Char('(')) + 1;
         const int nameLength = data.lastIndexOf(QLatin1Char(')')) - nameStartIdx;
+        QString processName = data.mid(nameStartIdx, nameLength);
 
-        setName(data.mid(nameStartIdx, nameLength));
+        if (processName == QLatin1String("flatpak-spawn")) {
+            const QString wrappedName = resolveFlatpakSpawnName(pid);
+            if (!wrappedName.isEmpty()) {
+                processName = wrappedName;
+            }
+        }
+
+        setName(processName);
         return true;
     }
 
 private:
+    struct ProcStat {
+        QString name;
+        int processGroup = 0;
+        int foregroundProcessGroup = 0;
+    };
+
+    static bool readProcStat(int pid, ProcStat &stat)
+    {
+        QFile statFile(QStringLiteral("/proc/%1/stat").arg(pid));
+        if (!statFile.open(QIODevice::ReadOnly)) {
+            return false;
+        }
+
+        const QString data = QString::fromUtf8(statFile.readAll());
+        const int nameStartIdx = data.indexOf(QLatin1Char('('));
+        const int nameEndIdx = data.lastIndexOf(QLatin1Char(')'));
+
+        if (nameStartIdx < 0 || nameEndIdx <= nameStartIdx) {
+            return false;
+        }
+
+        // After ")" come fields from "state" (3) onward.
+        const QStringList fields = data.mid(nameEndIdx + 2).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (fields.size() < 6) {
+            return false;
+        }
+
+        bool ok = false;
+        const int processGroup = fields.at(2).toInt(&ok);
+        if (!ok) {
+            return false;
+        }
+
+        const int foregroundProcessGroup = fields.at(5).toInt(&ok);
+        if (!ok) {
+            return false;
+        }
+
+        stat.name = data.mid(nameStartIdx + 1, nameEndIdx - nameStartIdx - 1);
+        stat.processGroup = processGroup;
+        stat.foregroundProcessGroup = foregroundProcessGroup;
+        return true;
+    }
+
+    static QList<int> childrenOfPid(int pid)
+    {
+        QFile childrenFile(QStringLiteral("/proc/%1/task/%1/children").arg(pid));
+        if (!childrenFile.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+
+        const QStringList children = QString::fromUtf8(childrenFile.readAll()).simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        QList<int> result;
+        result.reserve(children.size());
+
+        for (const QString &childPid : children) {
+            bool ok = false;
+            const int parsedPid = childPid.toInt(&ok);
+            if (ok && parsedPid > 0) {
+                result.append(parsedPid);
+            }
+        }
+
+        return result;
+    }
+
+    static QString basenameForCommand(const QString &command)
+    {
+        const QString basename = QFileInfo(command).fileName();
+        return basename.isEmpty() ? command : basename;
+    }
+
+    static QString commandFromFlatpakSpawnArguments(const QVector<QString> &args)
+    {
+        if (args.size() < 2) {
+            return {};
+        }
+
+        for (int i = 1; i < args.size(); ++i) {
+            const QString &arg = args.at(i);
+
+            if (arg == QLatin1String("--")) {
+                return (i + 1 < args.size()) ? basenameForCommand(args.at(i + 1)) : QString();
+            }
+
+            // Options that may carry values inline.
+            if (arg.startsWith(QLatin1String("--directory=")) || arg.startsWith(QLatin1String("--env="))
+                || arg.startsWith(QLatin1String("--unset-env=")) || arg.startsWith(QLatin1String("--forward-fd="))
+                || arg.startsWith(QLatin1String("--sandbox-expose=")) || arg.startsWith(QLatin1String("--sandbox-expose-ro="))) {
+                continue;
+            }
+
+            // Options that are either value-less or have their value in the next arg.
+            if (arg == QLatin1String("--host") || arg == QLatin1String("--watch-bus") || arg == QLatin1String("--clear-env")
+                || arg == QLatin1String("--latest-version") || arg == QLatin1String("--sandbox") || arg == QLatin1String("--verbose")) {
+                continue;
+            }
+            if (arg == QLatin1String("--directory") || arg == QLatin1String("--env") || arg == QLatin1String("--unset-env")
+                || arg == QLatin1String("--forward-fd") || arg == QLatin1String("--sandbox-expose") || arg == QLatin1String("--sandbox-expose-ro")) {
+                ++i;
+                continue;
+            }
+
+            if (arg.startsWith(QLatin1Char('-'))) {
+                continue;
+            }
+
+            return basenameForCommand(arg);
+        }
+
+        return {};
+    }
+
+    QString resolveFlatpakSpawnName(int pid) const
+    {
+        QList<int> toVisit = childrenOfPid(pid);
+        QSet<int> visited;
+
+        QString foregroundName;
+        int foregroundPid = 0;
+        QString fallbackName;
+        int fallbackPid = 0;
+
+        while (!toVisit.isEmpty()) {
+            const int childPid = toVisit.takeLast();
+            if (visited.contains(childPid)) {
+                continue;
+            }
+            visited.insert(childPid);
+
+            ProcStat stat;
+            if (!readProcStat(childPid, stat)) {
+                continue;
+            }
+
+            if (stat.name != QLatin1String("flatpak-spawn")) {
+                const bool isForeground = stat.processGroup > 0 && stat.processGroup == stat.foregroundProcessGroup;
+                if (isForeground) {
+                    if (childPid > foregroundPid) {
+                        foregroundPid = childPid;
+                        foregroundName = stat.name;
+                    }
+                }
+
+                // If no foreground process can be identified, keep the newest descendant as fallback.
+                if (childPid > fallbackPid) {
+                    fallbackPid = childPid;
+                    fallbackName = stat.name;
+                }
+            }
+
+            const QList<int> children = childrenOfPid(childPid);
+            toVisit.append(children);
+        }
+
+        if (!foregroundName.isEmpty()) {
+            return foregroundName;
+        }
+
+        if (!fallbackName.isEmpty()) {
+            return fallbackName;
+        }
+
+        bool ok = false;
+        const QVector<QString> args = arguments(&ok);
+        return ok ? commandFromFlatpakSpawnArguments(args) : QString();
+    }
+
     bool readProcInfo(int pid) override
     {
         // indices of various fields within the process status file which
