@@ -131,6 +131,8 @@ rsync \
     --exclude '.git' \
     --exclude '.gitlab' \
     --exclude '.deb-build' \
+    --exclude '/Makefile' \
+    --exclude '/dist' \
     --exclude 'build-deb' \
     --exclude 'build' \
     --exclude 'build-*' \

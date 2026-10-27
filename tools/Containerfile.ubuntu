@@ -1,0 +1,30 @@
+ARG BASE_IMAGE=ubuntu:26.04
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        devscripts \
+        dpkg-dev \
+        equivs \
+        fakeroot \
+        git \
+        lsb-release \
+        rsync \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build-Depends come from the packaged control file so the image and the
+# dpkg-buildpackage run inside it can never drift apart. The build context for
+# this Containerfile is packaging/debian, which keeps it tiny.
+COPY control /tmp/konsole-build-deps/debian/control
+RUN apt-get update \
+    && cd /tmp/konsole-build-deps \
+    && mk-build-deps --install --remove \
+        --tool 'apt-get -y --no-install-recommends' \
+        debian/control \
+    && rm -rf /var/lib/apt/lists/* /tmp/konsole-build-deps
+
+WORKDIR /src

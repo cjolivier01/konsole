@@ -7,8 +7,10 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 # locally installed GLib/GIO builds under /usr/local.
 export DEB_LDFLAGS_MAINT_APPEND = -Wl,-rpath-link,/usr/local/lib/$(DEB_HOST_MULTIARCH) -Wl,-rpath-link,/usr/lib/$(DEB_HOST_MULTIARCH) -Wl,-rpath-link,/lib/$(DEB_HOST_MULTIARCH)
 
+# Pin the buildsystem: the repository ships a top-level developer Makefile,
+# and debhelper's autodetection would otherwise prefer it over CMakeLists.txt.
 %:
-	dh $@
+	dh $@ --buildsystem=cmake
 
 override_dh_auto_configure:
 	dh_auto_configure -- -DBUILD_TESTING=OFF -DENABLE_PLUGIN_SSHMANAGER=ON

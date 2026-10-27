@@ -14,9 +14,11 @@
 .swp.*
 Doxyfile
 Makefile
+!/Makefile
 avail
 random_seed
 /build*/
+/dist/
 CMakeLists.txt.user*
 *.unc-backup*
 doxydoc/
